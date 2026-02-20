@@ -1,22 +1,119 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --bg-primary: #0d1117;
+  --bg-secondary: #161b22;
+  --bg-tertiary: #21262d;
+  --border: #30363d;
+  --text-primary: #e6edf3;
+  --text-secondary: #8b949e;
+  --text-muted: #484f58;
+  --accent: #6366f1;
+  --accent-hover: #818cf8;
+  --green: #3fb950;
+  --yellow: #f59e0b;
+  --red: #f85149;
+}
+
 * {
-  margin: 0%;
-  padding: 0%;
+  margin: 0;
+  padding: 0;
   box-sizing: border-box;
+  font-family: 'Inter', sans-serif;
 }
 
-html,
 body {
-  height: 100%;
-  width: 100%;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
+  overflow: hidden;
 }
 
-.message-box{
-  scroll-behavior: smooth;
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
 }
-.message-box::-webkit-scrollbar{
-  display: none;
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Remove default focus outlines and replace with accent shadow */
+*:focus {
+  outline: none !important;
+}
+
+input:focus,
+textarea:focus,
+button:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+/* Animations */
+@keyframes pulse {
+
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes fadeInUp {
+  from {
+    transform: translateY(8px);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.animate-fadeInUp {
+  animation: fadeInUp 0.2s ease-out forwards;
+}
+
+.animate-pulse-slow {
+  animation: pulse 1s ease-in-out infinite;
+}
+
+/* Base style for code elements */
+code,
+pre,
+.font-mono {
+  font-family: 'JetBrains Mono', monospace !important;
+}
+
+@keyframes bounce {
+
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+  }
+
+  30% {
+    transform: translateY(-4px);
+  }
 }

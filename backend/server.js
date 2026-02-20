@@ -7,6 +7,14 @@ import mongoose from 'mongoose';
 import projectModel from './models/project.model.js';
 import { generateResult } from './services/ai.service.js';
 
+// Environment Variable Validation
+const requiredEnvVars = ['JWT_SECRET', 'GOOGLE_AI_KEY', 'MONGODB_URI'];
+requiredEnvVars.forEach(envVar => {
+    if (!process.env[envVar]) {
+        console.warn(`\x1b[33mWarning: Environment variable ${envVar} is not defined. The app may not function correctly.\x1b[0m`);
+    }
+});
+
 const port = process.env.PORT || 3000;
 
 
@@ -23,7 +31,7 @@ io.use(async (socket, next) => {
 
     try {
 
-        const token = socket.handshake.auth?.token || socket.handshake.headers.authorization?.split(' ')[ 1 ];
+        const token = socket.handshake.auth?.token || socket.handshake.headers.authorization?.split(' ')[1];
         const projectId = socket.handshake.query.projectId;
 
         if (!mongoose.Types.ObjectId.isValid(projectId)) {
@@ -32,6 +40,10 @@ io.use(async (socket, next) => {
 
 
         socket.project = await projectModel.findById(projectId);
+
+        if (!socket.project) {
+            return next(new Error('Project not found'));
+        }
 
 
         if (!token) {
@@ -69,32 +81,83 @@ io.on('connection', socket => {
     socket.on('project-message', async data => {
 
         const message = data.message;
-
         const aiIsPresentInMessage = message.includes('@ai');
+
         socket.broadcast.to(socket.roomId).emit('project-message', data)
 
         if (aiIsPresentInMessage) {
+            const prompt = message.replace('@ai', '').trim();
 
+            try {
+                const result = await generateResult(prompt);
+                let aiResponse;
 
-            const prompt = message.replace('@ai', '');
-
-            const result = await generateResult(prompt);
-
-
-            io.to(socket.roomId).emit('project-message', {
-                message: result,
-                sender: {
-                    _id: 'ai',
-                    email: 'AI'
+                try {
+                    aiResponse = JSON.parse(result);
+                } catch (e) {
+                    // Fallback if not valid JSON
+                    aiResponse = { text: result };
                 }
-            })
 
+                // 1. Send the text message to everyone in the room
+                io.to(socket.roomId).emit('project-message', {
+                    message: aiResponse.text || "I've processed your request.",
+                    sender: {
+                        _id: 'ai',
+                        email: 'Gemini AI'
+                    },
+                    timestamp: new Date().toISOString()
+                });
 
-            return
+                // 2. If the AI suggests file changes, broadcast them and save to DB
+                if (aiResponse.fileTree) {
+                    // Broadcast update to all clients in the room
+                    io.to(socket.roomId).emit('project-update', {
+                        fileTree: aiResponse.fileTree,
+                        sender: { _id: 'ai', email: 'Gemini AI' }
+                    });
+
+                    // Persist to database
+                    import('./services/project.service.js').then(projectService => {
+                        projectService.updateFileTree({
+                            projectId: socket.project._id.toString(),
+                            fileTree: { ...socket.project.fileTree, ...aiResponse.fileTree }
+                        }).catch(err => console.error("Failed to persist AI changes:", err));
+                    });
+                }
+
+                // 3. Handle build/start commands if needed (could be sent as a separate message or log)
+                if (aiResponse.buildCommand || aiResponse.startCommand) {
+                    io.to(socket.roomId).emit('project-message', {
+                        message: `Suggested commands:\n${aiResponse.buildCommand ? `Build: ${aiResponse.buildCommand.mainItem} ${aiResponse.buildCommand.commands.join(' ')}\n` : ''}${aiResponse.startCommand ? `Start: ${aiResponse.startCommand.mainItem} ${aiResponse.startCommand.commands.join(' ')}` : ''}`,
+                        sender: { _id: 'ai', email: 'Gemini AI' },
+                        timestamp: new Date().toISOString()
+                    });
+                }
+
+            } catch (error) {
+                console.error("Gemini AI Error:", error);
+                io.to(socket.roomId).emit('project-message', {
+                    message: "I encountered an error while processing your request. Please check my API key configuration.",
+                    sender: { _id: 'ai', email: 'Gemini AI' },
+                    timestamp: new Date().toISOString()
+                });
+            }
+            return;
         }
-
-
     })
+
+    socket.on('project-update', data => {
+        socket.broadcast.to(socket.roomId).emit('project-update', data)
+    })
+
+    socket.on('typing', ({ projectId, sender }) => {
+        socket.to(projectId).emit('typing', { sender });
+    });
+
+    socket.on('stop-typing', ({ projectId, sender }) => {
+        socket.to(projectId).emit('stop-typing', { sender });
+    });
 
     socket.on('disconnect', () => {
         console.log('user disconnected');

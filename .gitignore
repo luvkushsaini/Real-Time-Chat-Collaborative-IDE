@@ -1,2 +1,11 @@
 .env
 node_modules
+dist/
+build/
+*.log
+backend/test_*.js
+backend/list_models.js
+backend/*_output.txt
+backend/ai_error.txt
+.vscode/
+.DS_Store
