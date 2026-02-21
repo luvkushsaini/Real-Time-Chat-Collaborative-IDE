@@ -141,3 +141,16 @@ pre,
   padding: 0 !important;
   overflow: hidden;
 }
+
+/* xterm.js fixes for Tailwind */
+.xterm {
+  height: 100% !important;
+}
+
+.xterm-viewport {
+  overflow-y: auto !important;
+}
+
+.xterm canvas {
+  display: block !important;
+}

@@ -8,6 +8,174 @@ import Markdown from 'markdown-to-jsx';
 import hljs from 'highlight.js';
 import 'highlight.js/styles/github-dark.css';
 import { getWebContainer } from '../config/webContainer';
+import CodeMirror from "@uiw/react-codemirror";
+import { javascript } from "@codemirror/lang-javascript";
+import { css } from "@codemirror/lang-css";
+import { cpp } from "@codemirror/lang-cpp";
+import { EditorView, Decoration, ViewPlugin, WidgetType } from "@codemirror/view";
+import { StateEffect, StateField, RangeSetBuilder } from "@codemirror/state";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import { WebLinksAddon } from "@xterm/addon-web-links";
+import "@xterm/xterm/css/xterm.css";
+
+// --- COLLABORATOR COLOR SYSTEM ---
+const COLLABORATOR_COLORS = [
+    { bg: "#6366f1", light: "#6366f120", border: "#6366f1" }, // indigo
+    { bg: "#10b981", light: "#10b98120", border: "#10b981" }, // emerald
+    { bg: "#f59e0b", light: "#f59e0b20", border: "#f59e0b" }, // amber
+    { bg: "#ef4444", light: "#ef444420", border: "#ef4444" }, // red
+    { bg: "#8b5cf6", light: "#8b5cf620", border: "#8b5cf6" }, // violet
+    { bg: "#06b6d4", light: "#06b6d420", border: "#06b6d4" }, // cyan
+];
+
+const getUserColor = (email) => {
+    let hash = 0;
+    if (!email) return COLLABORATOR_COLORS[0];
+    for (let c of email) hash = c.charCodeAt(0) + ((hash << 5) - hash);
+    return COLLABORATOR_COLORS[Math.abs(hash) % COLLABORATOR_COLORS.length];
+};
+
+// --- CODEMIRROR REMOTE CURSOR EXTENSION ---
+const updateRemoteCursorEffect = StateEffect.define();
+const removeRemoteCursorEffect = StateEffect.define();
+
+class RemoteCursorWidget extends WidgetType {
+    constructor(username, color) {
+        super();
+        this.username = username;
+        this.color = color;
+    }
+    toDOM() {
+        const wrap = document.createElement("span");
+        wrap.style.cssText = `position: relative; display: inline-block;`;
+
+        const cursor = document.createElement("span");
+        cursor.style.cssText = `
+      display: inline-block;
+      width: 2px;
+      height: 18px;
+      background: ${this.color};
+      position: absolute;
+      left: 0;
+      top: 0;
+      animation: remoteCursorBlink 1.2s ease-in-out infinite;
+      border-radius: 1px;
+      box-shadow: 0 0 6px ${this.color}80;
+    `;
+
+        const label = document.createElement("span");
+        label.textContent = this.username;
+        label.style.cssText = `
+      position: absolute;
+      top: -20px;
+      left: 0;
+      background: ${this.color};
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 1px 6px;
+      border-radius: 4px 4px 4px 0;
+      white-space: nowrap;
+      pointer-events: none;
+      z-index: 100;
+      letter-spacing: 0.04em;
+      box-shadow: 0 2px 8px ${this.color}60;
+    `;
+
+        wrap.appendChild(cursor);
+        wrap.appendChild(label);
+        return wrap;
+    }
+    ignoreEvent() { return true; }
+}
+
+const remoteCursorField = StateField.define({
+    create() { return { cursors: {}, decorations: Decoration.none }; },
+    update(value, tr) {
+        let cursors = value.cursors;
+        let changed = false;
+
+        for (const effect of tr.effects) {
+            if (effect.is(updateRemoteCursorEffect)) {
+                cursors = { ...cursors, [effect.value.sender]: effect.value };
+                changed = true;
+            }
+            if (effect.is(removeRemoteCursorEffect)) {
+                cursors = { ...cursors };
+                delete cursors[effect.value.sender];
+                changed = true;
+            }
+        }
+
+        if (!changed && !tr.docChanged) return value;
+
+        const builder = new RangeSetBuilder();
+        const entries = Object.values(cursors).sort((a, b) => a.position - b.position);
+
+        for (const { position, anchor, username, color } of entries) {
+            const safePos = Math.min(position, tr.newDoc.length);
+            const safeAnchor = Math.min(anchor, tr.newDoc.length);
+
+            if (safePos !== safeAnchor) {
+                const from = Math.min(safePos, safeAnchor);
+                const to = Math.max(safePos, safeAnchor);
+                builder.add(from, to, Decoration.mark({
+                    style: `background: ${color}25; border-bottom: 1px solid ${color}60;`
+                }));
+            }
+
+            if (safePos !== -1) {
+                builder.add(safePos, safePos, Decoration.widget({
+                    widget: new RemoteCursorWidget(username, color),
+                    side: 1,
+                }));
+            }
+        }
+
+        return { cursors, decorations: builder.finish() };
+    },
+    provide: f => EditorView.decorations.from(f, state => state.decorations),
+});
+
+const remoteCursorsExtension = [remoteCursorField];
+
+// Add blink animation to document
+if (typeof document !== 'undefined') {
+    const styleId = 'codemirror-remote-cursor-styles';
+    if (!document.getElementById(styleId)) {
+        const style = document.createElement("style");
+        style.id = styleId;
+        style.textContent = `
+      @keyframes remoteCursorBlink {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.2; }
+      }
+    `;
+        document.head.appendChild(style);
+    }
+}
+
+const customTheme = EditorView.theme({
+    "&": { backgroundColor: "#0d1117", height: "100%" },
+    ".cm-content": { fontFamily: "'JetBrains Mono', monospace", fontSize: "13px", caretColor: "#e6edf3", padding: "12px 0" },
+    ".cm-line": { padding: "0 16px", lineHeight: "21px", color: "#e6edf3" },
+    ".cm-gutters": { backgroundColor: "#0d1117", borderRight: "1px solid #21262d", color: "#484f58", minWidth: "42px" },
+    ".cm-activeLineGutter": { backgroundColor: "#161b22" },
+    ".cm-activeLine": { backgroundColor: "#161b2260" },
+    ".cm-selectionBackground": { backgroundColor: "#6366f140 !important" },
+    ".cm-cursor": { borderLeftColor: "#e6edf3", borderLeftWidth: "2px" },
+    ".cm-foldGutter": { color: "#484f58" },
+    "&.cm-focused .cm-selectionBackground": { backgroundColor: "#6366f150 !important" },
+}, { dark: true });
+
+const getLanguageExtension = (filename) => {
+    if (!filename) return javascript();
+    if (filename.endsWith(".js") || filename.endsWith(".jsx")) return javascript({ jsx: true });
+    if (filename.endsWith(".css")) return css();
+    if (filename.endsWith(".cpp") || filename.endsWith(".c")) return cpp();
+    return javascript();
+};
 
 // --- Syntax Highlighting Component ---
 function SyntaxHighlightedCode(props) {
@@ -52,6 +220,126 @@ async function askGemini(prompt, code = "") {
     return data?.candidates?.[0]?.content?.parts?.[0]?.text || "No response from Gemini.";
 }
 
+// --- NEW TERMINAL PANEL COMPONENT ---
+function TerminalPanel({ shellProcess, xtermRef, shellWriterRef }) {
+    const terminalRef = useRef(null);
+    const fitAddonRef = useRef(null);
+
+    useEffect(() => {
+        const term = new Terminal({
+            cursorBlink: true,
+            cursorStyle: "block",
+            fontSize: 13,
+            fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+            lineHeight: 1.5,
+            letterSpacing: 0,
+            theme: {
+                background: "#0d1117",
+                foreground: "#e6edf3",
+                cursor: "#e6edf3",
+                cursorAccent: "#0d1117",
+                black: "#0d1117",
+                red: "#f85149",
+                green: "#3fb950",
+                yellow: "#d29922",
+                blue: "#58a6ff",
+                magenta: "#bc8cff",
+                cyan: "#39c5cf",
+                white: "#b1bac4",
+                brightBlack: "#6e7681",
+                brightRed: "#ff7b72",
+                brightGreen: "#56d364",
+                brightYellow: "#e3b341",
+                brightBlue: "#79c0ff",
+                brightMagenta: "#d2a8ff",
+                brightCyan: "#56d4dd",
+                brightWhite: "#f0f6fc",
+                selectionBackground: "#6366f140",
+            },
+            allowTransparency: true,
+            scrollback: 1000,
+            convertEol: true,
+        });
+
+        const fitAddon = new FitAddon();
+        const webLinksAddon = new WebLinksAddon();
+
+        term.loadAddon(fitAddon);
+        term.loadAddon(webLinksAddon);
+
+        term.open(terminalRef.current);
+        fitAddon.fit();
+
+        if (xtermRef) xtermRef.current = term;
+        fitAddonRef.current = fitAddon;
+
+        // Pipe shell output to xterm
+        if (shellProcess) {
+            const reader = shellProcess.output.getReader();
+            let isCancelled = false;
+
+            (async () => {
+                while (!isCancelled) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    term.write(value);
+                }
+            })();
+
+            // Pipe xterm keyboard input to shell
+            const writer = shellProcess.input.getWriter();
+            if (shellWriterRef) shellWriterRef.current = writer;
+
+            const disposeOnData = term.onData((data) => {
+                writer.write(data);
+            });
+
+            return () => {
+                isCancelled = true;
+                reader.releaseLock();
+                writer.releaseLock();
+                if (shellWriterRef) shellWriterRef.current = null;
+                disposeOnData.dispose();
+            };
+        }
+    }, [shellProcess, xtermRef]);
+
+    useEffect(() => {
+        // Resize observer to keep terminal fitted to container
+        const resizeObserver = new ResizeObserver(() => {
+            try {
+                if (fitAddonRef.current) {
+                    fitAddonRef.current.fit();
+                    if (shellProcess && xtermRef.current) {
+                        shellProcess.resize({
+                            cols: xtermRef.current.cols,
+                            rows: xtermRef.current.rows
+                        });
+                    }
+                }
+            } catch (e) { }
+        });
+
+        if (terminalRef.current) resizeObserver.observe(terminalRef.current);
+
+        return () => {
+            resizeObserver.disconnect();
+        };
+    }, [shellProcess, xtermRef]);
+
+    return (
+        <div
+            ref={terminalRef}
+            style={{
+                width: "100%",
+                height: "100%",
+                background: "#0d1117",
+                padding: "4px",
+            }}
+        />
+    );
+}
+
 const Project = () => {
     const location = useLocation();
     const navigate = useNavigate();
@@ -89,6 +377,14 @@ const Project = () => {
     const [toasts, setToasts] = useState([]);
     const [isLeaveModalOpen, setIsLeaveModalOpen] = useState(false);
 
+    const [remoteCursors, setRemoteCursors] = useState({});
+    const editorViewRef = useRef(null);
+    const throttleUpdateRef = useRef(null);
+    const [isTerminalVisible, setIsTerminalVisible] = useState(false);
+    const [shellProcess, setShellProcess] = useState(null);
+    const shellWriterRef = useRef(null);
+    const xtermRef = useRef(null);
+
     // --- Resizing Logic ---
     const [leftWidth, setLeftWidth] = useState(300);
     const [explorerWidth, setExplorerWidth] = useState(220);
@@ -121,6 +417,14 @@ const Project = () => {
         };
     }, [leftWidth]);
 
+    useEffect(() => {
+        if (webContainer && !shellProcess) {
+            webContainer.spawn('jsh').then(process => {
+                setShellProcess(process);
+            });
+        }
+    }, [webContainer, shellProcess]);
+
     const messageBoxRef = useRef(null);
     const aiEndRef = useRef(null);
     const saveTimeout = useRef(null);
@@ -151,6 +455,10 @@ const Project = () => {
             getWebContainer().then(container => {
                 setWebContainer(container);
                 console.log("WebContainer initialized");
+                // Initial mount
+                if (project.fileTree) {
+                    container.mount(project.fileTree);
+                }
             });
         }
 
@@ -186,6 +494,19 @@ const Project = () => {
             showLeaveToast(username || sender);
             // Mark for animation
             setOnlineUsers(prev => prev.map(u => u.email === sender ? { ...u, isLeaving: true } : u));
+
+            // Remove remote cursor
+            setRemoteCursors(prev => {
+                const updated = { ...prev };
+                delete updated[sender];
+                return updated;
+            });
+            if (editorViewRef.current) {
+                editorViewRef.current.dispatch({
+                    effects: removeRemoteCursorEffect.of({ sender })
+                });
+            }
+
             // Actually remove after animation
             setTimeout(() => {
                 setOnlineUsers(prev => prev.filter(u => u.email !== sender));
@@ -194,6 +515,48 @@ const Project = () => {
 
         receiveMessage('collaborator-joined', handleCollaboratorJoined);
         receiveMessage('collaborator-left', handleCollaboratorLeft);
+
+        receiveMessage('cursor-update', ({ sender, username, position, anchor, line, col, color }) => {
+            if (sender === user.email) return;
+
+            if (position === -1) {
+                setRemoteCursors(prev => {
+                    const updated = { ...prev };
+                    delete updated[sender];
+                    return updated;
+                });
+                if (editorViewRef.current) {
+                    editorViewRef.current.dispatch({
+                        effects: removeRemoteCursorEffect.of({ sender })
+                    });
+                }
+                return;
+            }
+
+            setRemoteCursors(prev => ({
+                ...prev,
+                [sender]: { position, anchor, username, color, line, col }
+            }));
+            if (editorViewRef.current) {
+                editorViewRef.current.dispatch({
+                    effects: updateRemoteCursorEffect.of({ sender, position, anchor, username, color })
+                });
+            }
+        });
+
+        receiveMessage('code-change', ({ code, sender }) => {
+            if (sender === user.email) return;
+            setFileTree(prev => {
+                if (!currentFile) return prev;
+                return {
+                    ...prev,
+                    [currentFile]: {
+                        ...prev[currentFile],
+                        file: { ...prev[currentFile].file, contents: code }
+                    }
+                };
+            });
+        });
 
         const handleClickOutside = () => {
             setContextMenu({ visible: false, x: 0, y: 0, file: null });
@@ -224,8 +587,17 @@ const Project = () => {
             socketInstance.off('stop-typing');
             socketInstance.off('collaborator-joined', handleCollaboratorJoined);
             socketInstance.off('collaborator-left', handleCollaboratorLeft);
+            socketInstance.off('cursor-update');
+            socketInstance.off('code-change');
             if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
             sendMessage('stop-typing', { projectId: project._id, sender: user?.email });
+
+            // Emit final cursor removal
+            sendMessage('cursor-update', {
+                projectId: project._id,
+                sender: user.email,
+                position: -1
+            });
         };
     }, [project?._id]);
 
@@ -283,6 +655,38 @@ const Project = () => {
         sendMessage('stop-typing', { projectId: project._id, sender: user?.email });
     };
 
+    const handleCursorActivity = (view) => {
+        if (!view || !user) return;
+
+        const now = Date.now();
+        if (throttleUpdateRef.current && now - throttleUpdateRef.current < 50) return;
+        throttleUpdateRef.current = now;
+
+        const head = view.state.selection.main.head;
+        const anchor = view.state.selection.main.anchor;
+        const line = view.state.doc.lineAt(head).number;
+        const col = head - view.state.doc.lineAt(head).from;
+
+        sendMessage("cursor-update", {
+            projectId: project._id,
+            sender: user.email,
+            username: user.name || user.email.split('@')[0],
+            position: head,
+            anchor: anchor,
+            line,
+            col,
+            color: getUserColor(user.email).bg,
+        });
+    };
+
+    useEffect(() => {
+        setRemoteCursors({});
+        if (editorViewRef.current) {
+            // Clear decorations for old file if necessary, 
+            // though switching files usually remounts/restarts the editor state
+        }
+    }, [currentFile]);
+
     const handleSendAI = async (text) => {
         if (!text.trim() || isAiLoading) return;
         setAiMessages(prev => [...prev, { role: 'user', text }]);
@@ -312,11 +716,20 @@ const Project = () => {
                 }
             }
         };
-
         setFileTree(ft);
+
+        if (webContainer) {
+            webContainer.fs.writeFile(currentFile, updatedContent);
+        }
 
         sendMessage('project-update', {
             fileTree: { [currentFile]: ft[currentFile] }
+        });
+
+        sendMessage('code-change', {
+            projectId: project._id,
+            code: updatedContent,
+            sender: user.email
         });
 
         if (saveTimeout.current) clearTimeout(saveTimeout.current);
@@ -377,6 +790,10 @@ const Project = () => {
             [fileName]: { file: { contents: '' } }
         };
         setFileTree(ft);
+
+        if (webContainer) {
+            webContainer.fs.writeFile(fileName, '');
+        }
         axios.put('/projects/update-file-tree', {
             projectId: project._id,
             fileTree: ft
@@ -399,32 +816,25 @@ const Project = () => {
     };
 
     const runCode = async () => {
-        setTerminalOutput('⚡ Running project...\n');
-        await webContainer.mount(fileTree);
-
-        if (currentFile && currentFile.endsWith('.js')) {
-            setTerminalOutput(prev => prev + `> node ${currentFile}\n`);
-            const runProcess = await webContainer.spawn("node", [currentFile]);
-            runProcess.output.pipeTo(new WritableStream({
-                write(chunk) { setTerminalOutput(prev => prev + chunk); }
-            }));
+        if (!webContainer || !shellProcess || !shellWriterRef.current) {
+            alert("Terminal or WebContainer not ready. Please wait a moment.");
             return;
         }
 
-        setTerminalOutput(prev => prev + '> npm install\n');
-        const installProcess = await webContainer.spawn("npm", ["install"]);
-        installProcess.output.pipeTo(new WritableStream({
-            write(chunk) { setTerminalOutput(prev => prev + chunk); }
-        }));
-        const exitCode = await installProcess.exit;
+        setIsTerminalVisible(true);
+        xtermRef.current?.focus();
 
-        if (exitCode === 0) {
-            setTerminalOutput(prev => prev + '> npm start\n');
-            const startProcess = await webContainer.spawn("npm", ["start"]);
-            startProcess.output.pipeTo(new WritableStream({
-                write(chunk) { setTerminalOutput(prev => prev + chunk); }
-            }));
-            webContainer.on('server-ready', (port, url) => setIframeUrl(url));
+        // Sync latest files before running
+        xtermRef.current?.write('\x1b[33m⚡ Syncing files...\x1b[0m\r\n');
+        await webContainer.mount(fileTree);
+
+        // Send commands via shared writer
+        await shellWriterRef.current.write('\x03'); // Ctrl+C
+
+        if (currentFile && currentFile.endsWith('.js')) {
+            await shellWriterRef.current.write(`node ${currentFile}\n`);
+        } else {
+            await shellWriterRef.current.write('npm install && npm start\n');
         }
     };
 
@@ -466,6 +876,14 @@ const Project = () => {
                     className="text-[11px] font-bold text-text-secondary hover:text-text-primary transition-colors flex items-center gap-2"
                 >
                     <i className="ri-layout-grid-line"></i> ALL PROJECTS
+                </button>
+
+                <button
+                    onClick={() => setIsTerminalVisible(!isTerminalVisible)}
+                    className={`px-3 py-1 text-[11px] font-semibold tracking-wider rounded-md transition-all duration-200 uppercase whitespace-nowrap
+                        ${isTerminalVisible ? 'bg-bg-tertiary text-text-primary border-l-2 border-accent' : 'text-text-secondary hover:text-text-primary hover:bg-bg-secondary'}`}
+                >
+                    Terminal
                 </button>
 
                 {/* Tab Switcher */}
@@ -869,24 +1287,51 @@ const Project = () => {
                         ))}
                     </div>
 
+                    {/* Active Editors Strip */}
+                    <div style={{
+                        height: 24, background: "#161b22", borderBottom: "1px solid #21262d",
+                        display: "flex", alignItems: "center", padding: "0 12px", gap: 10,
+                        fontSize: 11, color: "#8b949e",
+                    }}>
+                        <span style={{ fontSize: 10, letterSpacing: "0.06em" }}>EDITING:</span>
+                        {Object.entries(remoteCursors).map(([email, { username, color }]) => (
+                            <span key={email} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                <span style={{ width: 7, height: 7, borderRadius: "50%", background: color, display: "inline-block", boxShadow: `0 0 6px ${color}` }} />
+                                <span style={{ color, fontSize: 11, fontWeight: 600 }}>{username}</span>
+                            </span>
+                        ))}
+                        {Object.keys(remoteCursors).length === 0 && (
+                            <span style={{ fontSize: 10, color: "#484f58" }}>Only you</span>
+                        )}
+                    </div>
+
                     {/* Editor Content */}
                     <div className="flex-1 flex overflow-hidden font-mono">
                         {currentFile ? (
-                            <>
-                                {/* Line Numbers */}
-                                <div className="w-[42px] bg-bg-primary border-r border-border flex flex-col items-end py-4 text-text-muted text-[12px] select-none text-right font-mono">
-                                    {(fileTree[currentFile]?.file?.contents || '').split('\n').map((_, i) => (
-                                        <div key={i} className="px-2.5 h-[21px] flex items-center">{i + 1}</div>
-                                    ))}
-                                </div>
-                                {/* Textarea */}
-                                <textarea
-                                    spellCheck={false}
-                                    value={fileTree[currentFile]?.file?.contents || ''}
-                                    onChange={(e) => handleCodeUpdate(e.target.value)}
-                                    className="flex-1 bg-bg-primary border-none outline-none resize-none px-4 py-4 text-text-primary text-[13px] leading-[21px] font-mono selection:bg-accent/40"
-                                />
-                            </>
+                            <CodeMirror
+                                value={fileTree[currentFile]?.file?.contents || ''}
+                                height="100%"
+                                theme="dark"
+                                extensions={[
+                                    getLanguageExtension(currentFile),
+                                    remoteCursorsExtension,
+                                    EditorView.lineWrapping,
+                                    customTheme,
+                                ]}
+                                onChange={(value, viewUpdate) => {
+                                    handleCodeUpdate(value);
+                                    handleCursorActivity(viewUpdate.view);
+                                }}
+                                onUpdate={(viewUpdate) => {
+                                    if (viewUpdate.selectionSet) {
+                                        handleCursorActivity(viewUpdate.view);
+                                    }
+                                }}
+                                onCreateEditor={(view) => {
+                                    editorViewRef.current = view;
+                                }}
+                                style={{ fontSize: 13, height: "100%", width: "100%", fontFamily: "'JetBrains Mono', monospace" }}
+                            />
                         ) : (
                             <div className="flex-1 flex flex-col items-center justify-center opacity-10">
                                 <i className="ri-code-s-slash-line text-[100px] mb-4"></i>
@@ -895,18 +1340,85 @@ const Project = () => {
                         )}
                     </div>
 
-                    {/* Terminal Section (Floating logic integration) */}
-                    {terminalOutput && (
-                        <div className="h-[180px] bg-[#0A0D12] border-t border-border flex flex-col z-20">
-                            <div className="px-4 py-1.5 border-b border-border flex items-center justify-between">
-                                <span className="text-[9px] font-black tracking-widest text-text-muted uppercase">Terminal</span>
-                                <button onClick={() => setTerminalOutput('')} className="text-[9px] text-red uppercase font-bold hover:underline">Close</button>
+                    {/* Interactive Terminal Component */}
+                    <div className={`h-[240px] z-20 transition-all duration-300 relative ${isTerminalVisible ? 'translate-y-0' : 'translate-y-full'}`}>
+                        <div style={{
+                            display: "flex", flexDirection: "column",
+                            height: "100%", background: "#0d1117",
+                            border: "1px solid #21262d", borderRadius: "0 0 8px 8px",
+                        }}>
+                            {/* Header */}
+                            <div style={{
+                                height: 36, background: "#161b22",
+                                borderBottom: "1px solid #21262d",
+                                display: "flex", alignItems: "center",
+                                padding: "0 12px", gap: 10, flexShrink: 0,
+                            }}>
+                                <span style={{
+                                    width: 8, height: 8, borderRadius: "50%",
+                                    background: "#3fb950", boxShadow: "0 0 6px #3fb950",
+                                    display: "inline-block",
+                                }} />
+                                <span style={{
+                                    fontSize: 11, fontWeight: 700, color: "#8b949e",
+                                    letterSpacing: "0.08em", fontFamily: "'JetBrains Mono', monospace",
+                                }}>TERMINAL SHELL</span>
+
+                                <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                                    {/* Stop Button */}
+                                    <button
+                                        onClick={async () => {
+                                            if (shellWriterRef.current) {
+                                                await shellWriterRef.current.write('\x03');
+                                            }
+                                        }}
+                                        style={{
+                                            padding: "2px 10px", borderRadius: 4, border: "none",
+                                            background: "transparent", color: "#f85149",
+                                            fontSize: 11, fontWeight: 600, cursor: "pointer",
+                                            letterSpacing: "0.06em",
+                                        }}
+                                    >STOP</button>
+
+                                    {/* Clear Button */}
+                                    <button
+                                        onClick={() => xtermRef.current?.clear()}
+                                        style={{
+                                            padding: "2px 10px", borderRadius: 4, border: "none",
+                                            background: "transparent", color: "#8b949e",
+                                            fontSize: 11, fontWeight: 600, cursor: "pointer",
+                                            letterSpacing: "0.06em",
+                                        }}
+                                    >CLEAR</button>
+
+                                    {/* Minimize Button */}
+                                    <button
+                                        onClick={() => setIsTerminalVisible(false)}
+                                        style={{
+                                            padding: "2px 10px", borderRadius: 4, border: "none",
+                                            background: "transparent", color: "#8b949e",
+                                            fontSize: 11, fontWeight: 600, cursor: "pointer",
+                                            letterSpacing: "0.06em",
+                                        }}
+                                    >MINIMIZE</button>
+                                </div>
                             </div>
-                            <div className="flex-1 p-3 overflow-y-auto font-mono text-[11px] text-[#A5B4FC] scrollbar-hide">
-                                <pre className="whitespace-pre-wrap">{terminalOutput}</pre>
+
+                            {/* xterm.js Terminal */}
+                            <div style={{
+                                flex: 1,
+                                overflow: "hidden",
+                                padding: "4px 0",
+                                display: isTerminalVisible ? 'block' : 'none'
+                            }}>
+                                <TerminalPanel
+                                    shellProcess={shellProcess}
+                                    xtermRef={xtermRef}
+                                    shellWriterRef={shellWriterRef}
+                                />
                             </div>
                         </div>
-                    )}
+                    </div>
 
                     {/* Preview (Iframe) */}
                     {iframeUrl && (
