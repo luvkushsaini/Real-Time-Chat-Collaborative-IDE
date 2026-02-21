@@ -185,6 +185,14 @@ io.on('connection', socket => {
     socket.on('disconnect', () => {
         console.log('user disconnected');
     });
+
+    socket.on("cursor-update", ({ projectId, sender, username, position, anchor, line, col, color }) => {
+        socket.in(projectId).emit("cursor-update", { sender, username, position, anchor, line, col, color });
+    });
+
+    socket.on("code-change", ({ projectId, code, sender }) => {
+        socket.in(projectId).emit("code-change", { code, sender });
+    });
 });
 
 
