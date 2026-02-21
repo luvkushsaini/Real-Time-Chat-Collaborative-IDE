@@ -85,6 +85,9 @@ const Project = () => {
     const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
     const [newFileName, setNewFileName] = useState('');
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+    const [onlineUsers, setOnlineUsers] = useState([]);
+    const [toasts, setToasts] = useState([]);
+    const [isLeaveModalOpen, setIsLeaveModalOpen] = useState(false);
 
     // --- Resizing Logic ---
     const [leftWidth, setLeftWidth] = useState(300);
@@ -138,6 +141,12 @@ const Project = () => {
 
         const socketInstance = initializeSocket(project._id);
 
+        sendMessage('join-project', {
+            projectId: project._id,
+            email: user.email,
+            username: user.name || user.email.split('@')[0]
+        });
+
         if (!webContainer) {
             getWebContainer().then(container => {
                 setWebContainer(container);
@@ -166,6 +175,26 @@ const Project = () => {
             setTypingUsers(prev => prev.filter(email => email !== sender));
         });
 
+        const handleCollaboratorJoined = ({ username, sender }) => {
+            setOnlineUsers(prev => {
+                if (prev.find(u => u.email === sender)) return prev;
+                return [...prev, { email: sender, username }];
+            });
+        };
+
+        const handleCollaboratorLeft = ({ username, sender }) => {
+            showLeaveToast(username || sender);
+            // Mark for animation
+            setOnlineUsers(prev => prev.map(u => u.email === sender ? { ...u, isLeaving: true } : u));
+            // Actually remove after animation
+            setTimeout(() => {
+                setOnlineUsers(prev => prev.filter(u => u.email !== sender));
+            }, 250);
+        };
+
+        receiveMessage('collaborator-joined', handleCollaboratorJoined);
+        receiveMessage('collaborator-left', handleCollaboratorLeft);
+
         const handleClickOutside = () => {
             setContextMenu({ visible: false, x: 0, y: 0, file: null });
             setIsSettingsOpen(false);
@@ -176,6 +205,14 @@ const Project = () => {
         axios.get(`/projects/get-project/${project._id}`).then(res => {
             setProject(res.data.project);
             setFileTree(res.data.project.fileTree || {});
+
+            // Initialize online users with current collaborator list
+            const initialOnline = res.data.project.users.map(u => ({
+                email: u.email,
+                username: u.name || u.email.split('@')[0]
+            }));
+            setOnlineUsers(initialOnline);
+
         }).catch(err => {
             console.error("Failed to fetch project data:", err);
         });
@@ -185,6 +222,8 @@ const Project = () => {
             socketInstance.off('project-update');
             socketInstance.off('typing');
             socketInstance.off('stop-typing');
+            socketInstance.off('collaborator-joined', handleCollaboratorJoined);
+            socketInstance.off('collaborator-left', handleCollaboratorLeft);
             if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
             sendMessage('stop-typing', { projectId: project._id, sender: user?.email });
         };
@@ -199,6 +238,26 @@ const Project = () => {
     useEffect(() => {
         aiEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [aiMessages, isAiLoading]);
+
+    const showLeaveToast = (username) => {
+        const id = Date.now();
+        const initial = username ? username[0].toUpperCase() : '?';
+        setToasts(prev => [...prev, { id, username, initial }]);
+        setTimeout(() => {
+            setToasts(prev => prev.filter(t => t.id !== id));
+        }, 4000);
+    };
+
+    const handleLeaveProject = () => {
+        sendMessage('leave-project', {
+            projectId: project._id,
+            sender: user.email,
+            username: user.name || user.email.split('@')[0]
+        });
+        const socketInstance = initializeSocket(project._id);
+        socketInstance.disconnect();
+        navigate('/');
+    };
 
     // --- Handlers ---
     const handleSendChat = (e) => {
@@ -425,10 +484,37 @@ const Project = () => {
                 <div className="flex-1" />
 
                 <div className="flex items-center gap-4 relative">
+                    {/* Leave Project Button */}
+                    <button
+                        onClick={() => setIsLeaveModalOpen(true)}
+                        style={{
+                            background: 'transparent',
+                            border: '1px solid #f85149',
+                            color: '#f85149',
+                            borderRadius: '6px',
+                            padding: '5px 12px',
+                            fontSize: '12px',
+                            fontWeight: '600',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            transition: 'all 0.2s'
+                        }}
+                        className="hover:bg-[#f8514915] hover:shadow-[0_0_8px_rgba(248,81,73,0.3)]"
+                    >
+                        <i className="ri-logout-box-r-line"></i>
+                        Leave Project
+                    </button>
+
                     <div className="flex -space-x-2">
-                        {project.users?.map((u, i) => (
-                            <div key={i} title={u.email} className="z-[10]">
-                                <Avatar char={u.email} color={`hsl(${i * 137}, 60%, 50%)`} size={28} />
+                        {onlineUsers.map((u, i) => (
+                            <div
+                                key={u.email}
+                                title={u.email}
+                                className={`z-[10] transition-all duration-250 ${u.isLeaving ? 'leaving-user' : ''}`}
+                            >
+                                <Avatar char={u.username || u.email} color={`hsl(${i * 137}, 60%, 50%)`} size={28} />
                             </div>
                         ))}
                     </div>
@@ -913,6 +999,60 @@ const Project = () => {
                     </div>
                 </div>
             )}
+
+            {/* --- LEAVE CONFIRMATION MODAL --- */}
+            {isLeaveModalOpen && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-[4px] z-[9999] flex items-center justify-center p-4">
+                    <div className="bg-[#161b22] border border-[#30363d] p-6 rounded-xl w-full max-w-[360px] shadow-2xl animate-fadeInUp">
+                        <h2 className="text-[16px] font-bold text-[#e6edf3] mb-2">Leave Project?</h2>
+                        <p className="text-[13px] text-[#8b949e] mb-6">
+                            You will be removed from <span className="text-text-primary font-semibold">{project.name}</span>. Other collaborators will be notified.
+                        </p>
+                        <div className="flex gap-3">
+                            <button
+                                onClick={() => setIsLeaveModalOpen(false)}
+                                className="flex-1 px-5 py-2 bg-[#21262d] text-[#e6edf3] border border-[#30363d] rounded-lg text-sm font-semibold hover:bg-[#30363d] transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleLeaveProject}
+                                className="flex-1 px-5 py-2 bg-gradient-to-br from-[#da3633] to-[#f85149] text-white rounded-lg text-sm font-semibold hover:shadow-[0_0_15px_rgba(248,81,73,0.4)] transition-all"
+                            >
+                                Leave
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* --- TOAST NOTIFICATIONS --- */}
+            <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[9999] flex flex-col gap-2 items-center pointer-events-none">
+                {toasts.map(toast => (
+                    <div
+                        key={toast.id}
+                        className="pointer-events-auto bg-[#161b22] border border-[#30363d] rounded-[10px] p-3 pr-4 shadow-2xl flex items-center gap-3 animate-slideInFromTop min-w-[320px]"
+                    >
+                        <div className="w-7 h-7 rounded-full bg-[#f85149] flex items-center justify-center font-bold text-white text-[10px] shrink-0">
+                            {toast.initial}
+                        </div>
+                        <div className="flex-1 overflow-hidden">
+                            <p className="text-[13px] font-bold text-[#e6edf3] leading-tight truncate">
+                                {toast.username || 'Someone'} left the project
+                            </p>
+                            <p className="text-[11px] text-[#8b949e] leading-tight">
+                                They have been removed from the collaboration
+                            </p>
+                        </div>
+                        <button
+                            onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))}
+                            className="text-[#484f58] hover:text-[#e6edf3] transition-colors"
+                        >
+                            <i className="ri-close-line text-lg"></i>
+                        </button>
+                    </div>
+                ))}
+            </div>
         </div>
     );
 };

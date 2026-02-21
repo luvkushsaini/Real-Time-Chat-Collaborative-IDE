@@ -74,9 +74,12 @@ io.on('connection', socket => {
 
     console.log('a user connected');
 
-
-
-    socket.join(socket.roomId);
+    socket.on("join-project", ({ projectId, email, username }) => {
+        socket.data.userEmail = email;
+        socket.data.username = username;
+        socket.join(projectId);
+        socket.to(projectId).emit("collaborator-joined", { username, sender: email });
+    });
 
     socket.on('project-message', async data => {
 
@@ -159,9 +162,28 @@ io.on('connection', socket => {
         socket.to(projectId).emit('stop-typing', { sender });
     });
 
+    socket.on("leave-project", ({ projectId, sender, username }) => {
+        // Notify everyone else in the room
+        socket.in(projectId).emit("collaborator-left", { sender, username });
+        // Remove from room
+        socket.leave(projectId);
+    });
+
+    // Also handle on disconnect (tab close / crash)
+    socket.on("disconnecting", () => {
+        const rooms = [...socket.rooms];
+        rooms.forEach(room => {
+            if (room !== socket.id) {
+                socket.in(room).emit("collaborator-left", {
+                    sender: socket.data.userEmail, // set this on socket.data when user joins
+                    username: socket.data.username
+                });
+            }
+        });
+    });
+
     socket.on('disconnect', () => {
         console.log('user disconnected');
-        socket.leave(socket.roomId)
     });
 });
 
