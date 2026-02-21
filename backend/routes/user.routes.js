@@ -8,6 +8,7 @@ const router = Router();
 
 
 router.post('/register',
+    body('name').notEmpty().withMessage('Name is required').isLength({ min: 3, max: 30 }).withMessage('Name must be 3-30 characters').trim(),
     body('email').isEmail().withMessage('Email must be a valid email address'),
     body('password').isLength({ min: 3 }).withMessage('Password must be at least 3 characters long'),
     userController.createUserController);

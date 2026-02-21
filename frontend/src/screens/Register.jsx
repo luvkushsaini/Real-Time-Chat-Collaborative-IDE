@@ -5,6 +5,7 @@ import axios from '../config/axios'
 
 const Register = () => {
 
+    const [name, setName] = useState('')
     const [email, setEmail] = useState('')
     const [password, setPassword] = useState('')
 
@@ -18,6 +19,7 @@ const Register = () => {
         e.preventDefault()
 
         axios.post('/users/register', {
+            name,
             email,
             password
         }).then((res) => {
@@ -39,6 +41,16 @@ const Register = () => {
                 <form
                     onSubmit={submitHandler}
                 >
+                    <div className="mb-4">
+                        <label className="block text-gray-400 mb-2" htmlFor="name">Name</label>
+                        <input
+                            onChange={(e) => setName(e.target.value)}
+                            type="text"
+                            id="name"
+                            className="w-full p-3 rounded bg-gray-700 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder="Enter your name"
+                        />
+                    </div>
                     <div className="mb-4">
                         <label className="block text-gray-400 mb-2" htmlFor="email">Email</label>
                         <input

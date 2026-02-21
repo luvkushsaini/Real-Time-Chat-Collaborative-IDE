@@ -3,6 +3,13 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 
 const userSchema = new mongoose.Schema({
+    name: {
+        type: String,
+        required: true,
+        trim: true,
+        minLength: [3, 'Name must be at least 3 characters long'],
+        maxLength: [30, 'Name must not be longer than 30 characters']
+    },
     email: {
         type: String,
         required: true,
@@ -32,7 +39,8 @@ userSchema.methods.generateJWT = function () {
     return jwt.sign(
         {
             _id: this._id,
-            email: this.email
+            email: this.email,
+            name: this.name
         },
         process.env.JWT_SECRET,
         { expiresIn: '24h' }
